@@ -82,6 +82,21 @@ TEST_CASE("ProjectData::put with series", "[ohmmsapp]")
   // host and date nodes get added for output to the .cont.xml file
 }
 
+TEST_CASE("ProjectData preserves long project IDs in the output root", "[ohmmsapp]")
+{
+  for (const int length : {250, 300})
+  {
+    CAPTURE(length);
+    const std::string title(length, 'x');
+    Libxml2Document doc;
+    REQUIRE(doc.parseFromString("<project id=\"" + title + "\" series=\"12\"/>"));
+
+    ProjectData project;
+    REQUIRE(project.put(doc.getRoot()));
+    CHECK(project.currentMainRoot() == title + ".s012");
+  }
+}
+
 TEST_CASE("ProjectData::TestDriverVersion", "[ohmmsapp]")
 {
   using DV = ProjectData::DriverVersion;

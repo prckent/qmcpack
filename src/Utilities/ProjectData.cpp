@@ -21,8 +21,6 @@
 #include "ModernStringUtils.hpp"
 #include "Utilities/qmc_common.h"
 
-#include <array>
-
 namespace qmcplusplus
 {
 
@@ -95,15 +93,10 @@ void ProjectData::rewind()
  */
 void ProjectData::reset()
 {
-  std::array<char, 256> fileroot;
-
-  int file_len = std::snprintf(fileroot.data(), fileroot.size(), "%s%s.s%03d", title_.c_str(),
-                               qmc_common.get_filename_infix_for_ensemble_jobs().c_str(), series_);
-
-  if (file_len < 0)
-    throw std::runtime_error("Error generating project_main");
-
-  project_main_ = std::string(fileroot.data(), file_len);
+  std::string series = std::to_string(series_);
+  if (series.size() < 3)
+    series.insert(series_ < 0 ? 1 : 0, 3 - series.size(), '0');
+  project_main_ = title_ + qmc_common.get_filename_infix_for_ensemble_jobs() + ".s" + series;
   std::stringstream s;
   s << series_ + 1;
   if (cur_)
