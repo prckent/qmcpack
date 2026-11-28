@@ -202,6 +202,13 @@ void InputSection::setDefaults()
 
 void InputSection::setFromStream(const std::string& name, std::istringstream& svalue)
 {
+  const auto invalidValue = [&] { throw UniformCommunicateError("Invalid value for " + name + " in " + section_name); };
+  const auto assignNumericValue = [&](auto value) {
+    if (!(svalue >> value) || !(svalue >> std::ws).eof())
+      invalidValue();
+    assignValue(name, value);
+  };
+
   if (isString(name) || isEnumString(name))
   {
     std::string value;
@@ -218,8 +225,13 @@ void InputSection::setFromStream(const std::string& name, std::istringstream& sv
   else if (isMultiReal(name))
   {
     std::vector<Real> real_values;
-    for (Real value; svalue >> value;)
-      real_values.push_back(static_cast<Real>(value));
+    while (!(svalue >> std::ws).eof())
+    {
+      Real value;
+      if (!(svalue >> value))
+        invalidValue();
+      real_values.push_back(value);
+    }
     assignValue(name, real_values);
   }
   else if (isBool(name))
@@ -230,23 +242,11 @@ void InputSection::setFromStream(const std::string& name, std::istringstream& sv
     assignValue(name, value);
   }
   else if (isInteger(name))
-  {
-    int value;
-    svalue >> value;
-    assignValue(name, value);
-  }
+    assignNumericValue(int{});
   else if (isReal(name))
-  {
-    Real value;
-    svalue >> value;
-    assignValue(name, Real(value));
-  }
+    assignNumericValue(Real{});
   else if (isPosition(name))
-  {
-    Position value;
-    svalue >> value;
-    assignValue(name, value);
-  }
+    assignNumericValue(Position{});
   else
   {
     std::stringstream error;

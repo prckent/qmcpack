@@ -266,6 +266,33 @@ TEST_CASE("InputSection::readXML", "[estimators]")
   }
 }
 
+TEST_CASE("InputSection rejects invalid numeric XML values", "[estimators]")
+{
+  const std::pair<std::string_view, std::string_view> invalid_values[] = {{"count", ""},
+                                                                          {"count", "999999999999999999999"},
+                                                                          {"count", "8junk"},
+                                                                          {"width", "1.5 extra"},
+                                                                          {"width", "1e9999"},
+                                                                          {"center", "1 2"},
+                                                                          {"center", "1 2 3 4"},
+                                                                          {"density", "1 2 invalid"},
+                                                                          {"density", "1 1e9999"}};
+  for (const auto& [name, value] : invalid_values)
+  {
+    CAPTURE(name, value);
+    std::ostringstream xml;
+    xml << "<test full=\"no\">";
+    if (name != "count")
+      xml << "<count>15</count>";
+    xml << '<' << name << '>' << value << "</" << name << "></test>";
+
+    Libxml2Document doc;
+    REQUIRE(doc.parseFromString(xml.str()));
+    TestInputSection input;
+    CHECK_THROWS_AS(input.readXML(doc.getRoot()), UniformCommunicateError);
+  }
+}
+
 TEST_CASE("InputSection::InvalidElement", "[estimators]")
 {
   std::string invalid_element{R"(<test> &lt; </test>)"};
