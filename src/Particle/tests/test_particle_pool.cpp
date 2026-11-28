@@ -14,7 +14,9 @@
 
 #include "Message/Communicate.h"
 #include "OhmmsData/Libxml2Doc.h"
+#include "Particle/InitMolecularSystem.h"
 #include "Particle/ParticleSetPool.h"
+#include "Utilities/RandomGenerator.h"
 
 
 #include <stdio.h>
@@ -122,6 +124,71 @@ TEST_CASE("ParticleSetPool random", "[qmcapp]")
 
   REQUIRE(elec->R[0][0] != 0.0);
   REQUIRE(elec->spins[0] != 0.0);
+}
+
+TEST_CASE("Initialize electrons in the padded ion volume", "[qmcapp]")
+{
+  ParticleSetPool pool(*OHMMS::Controller);
+  Libxml2Document doc;
+  REQUIRE(doc.parseFromString(R"(
+<tmp>
+  <simulationcell>
+    <parameter name="lattice">20 0 0  0 20 0  0 0 20</parameter>
+    <parameter name="bconds">p p p</parameter>
+  </simulationcell>
+  <particleset name="ion0">
+    <group name="He" size="2">
+      <parameter name="charge">2</parameter>
+      <attrib name="position" datatype="posArray">6 6 6  14 14 14</attrib>
+    </group>
+  </particleset>
+  <particleset name="elec">
+    <group name="u" size="2">
+      <parameter name="charge">-1</parameter>
+    </group>
+  </particleset>
+  <init source="ion0" target="elec" use_volume="yes"/>
+</tmp>
+)"));
+  xmlNodePtr cell      = xmlFirstElementChild(doc.getRoot());
+  xmlNodePtr ions      = xmlNextElementSibling(cell);
+  xmlNodePtr electrons = xmlNextElementSibling(ions);
+  REQUIRE(pool.readSimulationCellXML(cell));
+  REQUIRE(pool.put(ions));
+  REQUIRE(pool.put(electrons));
+  ParticleSet* elec = pool.getParticleSet("elec");
+  REQUIRE(elec != nullptr);
+
+  ParticleSet::PosType lower(4.0);
+  ParticleSet::PosType upper(16.0);
+  SECTION("Padding stays inside the cell") {}
+  SECTION("Padding is clipped at the cell faces")
+  {
+    ParticleSet* ion_set = pool.getParticleSet("ion0");
+    REQUIRE(ion_set != nullptr);
+    ion_set->R[0] = ParticleSet::PosType(1.0, 5.0, 1.0);
+    ion_set->R[1] = ParticleSet::PosType(11.0, 19.0, 19.0);
+    lower         = ParticleSet::PosType(0.0, 3.0, 0.0);
+    upper         = ParticleSet::PosType(13.0, 20.0, 20.0);
+  }
+
+  constexpr auto seed = 42;
+  std::vector<RandomGenerator::uint_type> previous_state;
+  Random.save(previous_state);
+  Random.seed(seed);
+  InitMolecularSystem initialize(pool);
+  const bool initialized = initialize.put(xmlNextElementSibling(electrons));
+  Random.load(previous_state);
+  REQUIRE(initialized);
+  REQUIRE(elec->R.size() == 2);
+
+  RandomGenerator reference_rng(seed);
+  for (size_t electron = 0; electron < elec->R.size(); ++electron)
+    for (int dim = 0; dim < OHMMS_DIM; ++dim)
+    {
+      CAPTURE(electron, dim);
+      CHECK(elec->R[electron][dim] == Approx(lower[dim] + (upper[dim] - lower[dim]) * reference_rng()));
+    }
 }
 
 TEST_CASE("ParticleSetPool putLattice", "[qmcapp]")

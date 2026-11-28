@@ -230,24 +230,17 @@ void InitMolecularSystem::initWithVolume(ParticleSet* ions, ParticleSet* els)
   RealType buffer = 2.0; //buffer 2 bohr
   for (int idim = 0; idim < OHMMS_DIM; ++idim)
   {
-    //if(ions->getLattice().BoxBConds[idim])
-    //{
-    //  start[idim]=0.0;
-    //  end[idim]=1.0;
-    //  shift[idim]=0.0;
-    //}
-    //else
     {
       RealType buffer_r = buffer * ions->getLattice().OneOverLength[idim];
       start[idim]       = std::max((RealType)0.0, (start[idim] - buffer_r));
       end[idim]         = std::min((RealType)1.0, (end[idim] + buffer_r));
-      shift[idim]       = start[idim] * ions->getLattice().Length[idim];
-      if (std::abs(end[idim] = start[idim]) < buffer)
+      if (end[idim] - start[idim] < buffer_r)
       { //handle singular case
         start[idim] = std::max(0.0, start[idim] - buffer_r / 2.0);
         end[idim]   = std::min(1.0, end[idim] + buffer_r / 2.0);
       }
 
+      shift[idim]        = start[idim] * ions->getLattice().Length[idim];
       newbox(idim, idim) = (end[idim] - start[idim]) * ions->getLattice().Length[idim];
     }
   }
