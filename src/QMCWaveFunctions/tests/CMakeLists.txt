@@ -105,6 +105,7 @@ set(SPOSET_SRC
     test_einset_LiH.cpp
     test_einset_spinor.cpp
     test_spline_applyrotation.cpp
+    test_spline_coefficient_staging.cpp
     test_CompositeSPOSet.cpp
     test_hybridrep.cpp
     test_pw.cpp

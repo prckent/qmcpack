@@ -54,13 +54,14 @@ public:
    * @param band_index_map band index map
    * @param multi_bsplines the spline object being worked on
    * @param dist_comm distributed spline communicator
+   * @return the number of orbitals written via staging on this rank
    */
-  void initialize_spline_pio_gather(const int spin,
-                                    const BandInfoGroup& bandgroup,
-                                    const TinyVector<int, 3>& half_g,
-                                    const aligned_vector<int>& band_index_map,
-                                    MultiBsplineBase<ST>& multi_splines,
-                                    Communicate& dist_comm) const;
+  int initialize_spline_pio_gather(const int spin,
+                                  const BandInfoGroup& bandgroup,
+                                  const TinyVector<int, 3>& half_g,
+                                  const aligned_vector<int>& band_index_map,
+                                  MultiBsplineBase<ST>& multi_splines,
+                                  Communicate& dist_comm) const;
 };
 
 extern template class SplineSetReader<float>;

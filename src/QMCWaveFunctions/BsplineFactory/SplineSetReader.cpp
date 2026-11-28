@@ -15,6 +15,7 @@
 
 
 #include "SplineSetReader.h"
+#include <algorithm>
 #include "OneSplineOrbData.hpp"
 #include "Utilities/FairDivide.h"
 #include <Timer.h>
@@ -198,12 +199,12 @@ std::unique_ptr<SPOSet> SplineSetReader<ST>::create_spline_set(const std::string
 }
 
 template<typename ST>
-void SplineSetReader<ST>::initialize_spline_pio_gather(const int spin,
-                                                       const BandInfoGroup& bandgroup,
-                                                       const TinyVector<int, 3>& half_g,
-                                                       const aligned_vector<int>& band_index_map,
-                                                       MultiBsplineBase<ST>& multi_splines,
-                                                       Communicate& dist_comm) const
+int SplineSetReader<ST>::initialize_spline_pio_gather(const int spin,
+                                                      const BandInfoGroup& bandgroup,
+                                                      const TinyVector<int, 3>& half_g,
+                                                      const aligned_vector<int>& band_index_map,
+                                                      MultiBsplineBase<ST>& multi_splines,
+                                                      Communicate& dist_comm) const
 {
   const auto& block_offsets = multi_splines.getBlockOffsets();
   const size_t iblock       = dist_comm.rank();
@@ -225,18 +226,75 @@ void SplineSetReader<ST>::initialize_spline_pio_gather(const int spin,
   OneSplineOrbData oneband(mybuilder->MeshSize, half_g, use_duplex_splines_);
   Vector<std::complex<double>> cG(mybuilder->Gvecs[0].size());
   const std::vector<BandInfo>& cur_bands = bandgroup.myBands;
+  int staged_orbitals = 0;
   if (band_group_comm.isGroupLeader())
   {
     auto& group_leader_comm = band_group_comm.getInterGroupComm();
     hdf_archive h5f;
     h5f.open(mybuilder->H5FileName, H5F_ACC_RDONLY);
+    auto& block                        = multi_splines.getBlock(iblock);
+    const int splines_per_orbital       = use_duplex_splines_ ? 2 : 1;
+    constexpr int batch_size           = 8;
+    constexpr size_t max_staging_bytes = 64 * 1024 * 1024; // Per leader.
+    const int batch_splines            = batch_size * splines_per_orbital;
+
+    // Match setOneSpline's grid traversal, including the three boundary points per axis,
+    // but require consecutive grid points in both tables for the flat copy.
+    const intptr_t nx   = block.x_grid.num + 3;
+    const intptr_t ny   = block.y_grid.num + 3;
+    const intptr_t nz   = block.z_grid.num + 3;
+    const size_t points = static_cast<size_t>(nx) * ny * nz;
+    const auto is_contiguous_source = [&](const UBspline_3d_d& spline) {
+      return spline.x_grid.num == block.x_grid.num && spline.y_grid.num == block.y_grid.num &&
+          spline.z_grid.num == block.z_grid.num && spline.x_stride == ny * nz && spline.y_stride == nz &&
+          spline.coefs_size == points;
+    };
+    const bool stage_coefficients = iorb_last - iorb_first >= batch_size && block.z_stride >= 64 &&
+        points <= max_staging_bytes / (batch_splines * sizeof(ST)) &&
+        block.x_stride == ny * nz * block.z_stride && block.y_stride == nz * block.z_stride &&
+        block.coefs_size == points * block.z_stride && is_contiguous_source(oneband.get_spline_r()) &&
+        (!use_duplex_splines_ || is_contiguous_source(oneband.get_spline_i()));
+    // Stage one contiguous grid per spline in destination precision. On flush,
+    // transpose the batch into the point-major table: writing adjacent spline
+    // slots together uses more of each destination cache line than writing an
+    // entire spline with a large stride.
+    std::vector<ST> staging(stage_coefficients ? points * batch_splines : 0);
+    // Copy the freshly computed spline into its spline slot in the batch
+    // before the next orbital overwrites the single-spline workspace.
+    auto stage = [&](const UBspline_3d_d& spline, int slot) {
+      std::copy_n(spline.coefs, points, staging.data() + points * slot);
+    };
     for (int iorb = iorb_first; iorb < iorb_last; iorb++)
     {
       const auto& cur_band = cur_bands[band_index_map[iorb]];
       const int ti         = cur_band.TwistIndex;
       readOneOrbitalCoefs(psi_g_path(ti, spin, cur_band.BandIndex), h5f, cG);
       oneband.fft_spline(cG, mybuilder->Gvecs[0], mybuilder->primcell_kpoints[ti], rotate);
-      if (use_duplex_splines_)
+      if (stage_coefficients)
+      {
+        const int slot = (iorb - iorb_first) % batch_size; // Orbital's position in the current batch.
+        stage(oneband.get_spline_r(), slot * splines_per_orbital);
+        if (use_duplex_splines_)
+          stage(oneband.get_spline_i(), slot * splines_per_orbital + 1);
+
+        // Flush full batches and any partial batch at the end of this leader's range.
+        if (slot + 1 == batch_size || iorb + 1 == iorb_last)
+        {
+          // Convert the first orbital in the batch to a block-local spline index.
+          const size_t start = (iorb - slot) * splines_per_orbital - block_offsets[iblock];
+          const int count    = (slot + 1) * splines_per_orbital; // Filled spline slots, excluding padding.
+          // point indexes the flattened grid, and i indexes a staged spline.
+          for (size_t point = 0; point < points; ++point)
+          {
+            // First destination slot for this batch at the current grid location.
+            ST* out = block.coefs + point * block.z_stride + start;
+            for (int i = 0; i < count; ++i)
+              out[i] = staging[i * points + point];
+          }
+          staged_orbitals += slot + 1;
+        }
+      }
+      else if (use_duplex_splines_)
       {
         multi_splines.setOneSpline(oneband.get_spline_r(), iorb * 2);
         multi_splines.setOneSpline(oneband.get_spline_i(), iorb * 2 + 1);
@@ -260,6 +318,7 @@ void SplineSetReader<ST>::initialize_spline_pio_gather(const int spin,
       app_log() << "  Time to gather the table = " << now.elapsed() << std::endl;
     }
   }
+  return staged_orbitals;
 }
 
 template class SplineSetReader<float>;
